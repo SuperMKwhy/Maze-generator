@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adversarial Maze Generator</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f4f7f6; color: #333; }
+        h1 { margin: 20px 0; }
+        
+        .main-container { display: flex; gap: 20px; align-items: flex-start; }
+        .canvas-container { 
+            position: relative; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            border-radius: 4px; 
+            overflow: hidden; 
+            background: white;
+            border: 2px solid #444; 
+        }
+        
+        canvas { display: block; cursor: crosshair; }
+        
+        .controls { 
+            background: white; padding: 20px; border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05); width: 280px; 
+            display: flex; flex-direction: column; gap: 12px; 
+        }
+        
+        label { font-weight: bold; font-size: 13px; margin-bottom: 2px; display: block; }
+        select, button, input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;}
+        button { font-weight: bold; color: white; border: none; cursor: pointer; transition: 0.2s; margin-top: 5px;}
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: wait; }
+
+        .btn-reset { background-color: #6c757d; }
+        .btn-test { background-color: #e0a800; }
+        .btn-stop { background-color: #dc3545; }
+        .btn-gen { background-color: #6f42c1; } 
+        .btn-load { background-color: #007bff; }
+        .btn-save { background-color: #28a745; }
+
+        .group-box { border: 1px solid #eee; padding: 10px; border-radius: 5px; background: #fafafa; }
+        .row { display: flex; gap: 5px; }
+
+        .score-box { padding: 10px; background: #eef; border-radius: 5px; font-family: monospace; font-size: 12px; }
+        .score-val { font-weight: bold; color: #007bff; }
+        
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+
+    <h1>MicroMouse Generator (Avoid Center)</h1>
+
+    <div class="main-container">
+        
+        <div class="controls">
+            <!-- Settings -->
+            <div class="group-box">
+                <label>Maze Size</label>
+                <select id="sizeSelect">
+                    <option value="16">16 x 16</option>
+                    <option value="32">32 x 32</option>
+                </select>
+                <button class="btn-reset" onclick="resetMaze()">Reset Grid</button>
+            </div>
+
+            <!-- Generator -->
+            <div class="group-box">
+                <label style="color:#6f42c1;">Adversarial Generator</label>
+                <div class="row">
+                    <div>
+                        <label>Target Walls</label>
+                        <input type="number" id="genWalls" value="150" min="1">
+                    </div>
+                </div>
+                <button id="genBtn" class="btn-gen" onclick="generateMazeWalk()">Generate (Outer Ring)</button>
+                <div id="genStatus" style="font-size:11px; color:#666; margin-top:5px; height:15px;"></div>
+            </div>
+
+            <!-- Simulation -->
+            <div class="group-box">
+                <label>Robot Simulation</label>
+                <select id="algoSelect">
+                    <option value="astar">A* (God Mode)</option>
+                    <option value="flood">Flood Fill (Explore)</option>
+                </select>
+                <button id="runBtn" class="btn-test" onclick="toggleRun()">Test Run</button>
+            </div>
+
+            <!-- Score -->
+            <div id="scorePanel" class="score-box">
+                <div>Run Dist: <span id="runDist" class="score-val">0</span></div>
+                <div>Run Turns: <span id="runTurns" class="score-val">0</span></div>
+                <div style="margin-top:5px; border-top:1px solid #ccc; padding-top:5px;">
+                    Best Dist: <span id="bestDist" class="score-val">0</span><br>
+                    Best Turns: <span id="bestTurns" class="score-val">0</span>
+                </div>
+                <div style="margin-top:5px; font-size:14px;">
+                    Score: <span id="finalScore" style="color:#d63384; font-weight:bold;">0</span>
+                </div>
+            </div>
+
+            <!-- File IO -->
+            <div class="row">
+                <input type="file" id="fileInput" accept=".csv">
+                <button class="btn-load" onclick="document.getElementById('fileInput').click()">Load</button>
+                <button class="btn-save" onclick="saveMaze()">Save</button>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="mazeCanvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mazeCanvas');
+        const ctx = canvas.getContext('2d');
+        const sizeSelect = document.getElementById('sizeSelect');
+        const algoSelect = document.getElementById('algoSelect');
+        const runBtn = document.getElementById('runBtn');
+        const genBtn = document.getElementById('genBtn');
+        const genStatus = document.getElementById('genStatus');
+        const fileInput = document.getElementById('fileInput');
+
+        // Score Refs
+        const uiRunDist = document.getElementById('runDist');
+        const uiRunTurns = document.getElementById('runTurns');
+        const uiBestDist = document.getElementById('bestDist');
+        const uiBestTurns = document.getElementById('bestTurns');
+        const uiFinalScore = document.getElementById('finalScore');
+
+        // Config
+        let cellSize = 35;
+        let gridSize = 16;
+        let grid = []; // [x][y][N,E,S,W]
+        const startPos = {x: 0, y: 0};
+        let goalPositions = [];
+
+        // State
+        let isRunning = false;
+        let animationId = null;
+        let robot = { x: 0, y: 0, dir: 1 }; 
+        let pathTrace = [];
+        
+        // Sim State
+        let aStarPath = [];
+        let aStarIndex = 0;
+        let floodMemory = []; 
+
+        // --- Init ---
+
+        function initGrid(size) {
+            let g = [];
+            for(let x=0; x<size; x++) {
+                let col = [];
+                for(let y=0; y<size; y++) col.push([0, 0, 0, 0]);
+                g.push(col);
+            }
+            for(let i=0; i<size; i++) {
+                g[i][size-1][0] = 1; // N
+                g[size-1][i][1] = 1; // E
+                g[i][0][2] = 1;      // S
+                g[0][i][3] = 1;      // W
+            }
+            return g;
+        }
+
+        function resetMaze() {
+            stopSimulation();
+            grid = initGrid(gridSize);
+            robot = {x:0, y:0, dir:1}; 
+            pathTrace = [];
+            draw();
+            updateScoreUI(0,0,0,0);
+        }
+
+        function resizeCanvas() {
+            stopSimulation();
+            gridSize = parseInt(sizeSelect.value);
+            cellSize = gridSize === 32 ? 20 : 35;
+            canvas.width = gridSize * cellSize;
+            canvas.height = gridSize * cellSize;
+            
+            let mid = gridSize / 2;
+            goalPositions = [
+                {x: mid - 1, y: mid - 1}, {x: mid - 1, y: mid},
+                {x: mid, y: mid - 1}, {x: mid, y: mid}
+            ];
+
+            grid = initGrid(gridSize);
+            draw();
+        }
+
+        // --- Adversarial Generator (Avoid Center) ---
+
+        async function generateMazeWalk() {
+            if(isRunning) stopSimulation();
+            resetMaze();
+            
+            const maxWalls = parseInt(document.getElementById('genWalls').value) || 150;
+            const animSpeed = 40; 
+
+            genBtn.disabled = true;
+            let wallsPlaced = 0;
+            
+            robot = {x:0, y:0, dir: 0}; 
+            pathTrace = [{x:0, y:0}]; 
+            genStatus.innerText = "Generator: Staying Outer Ring...";
+
+            while(wallsPlaced < maxWalls) {
+                
+                // 1. Get Path (With AVOID CENTER preference)
+                // We pass 'true' for avoidCenter option
+                let path = solveAStar(grid, {x: robot.x, y: robot.y}, {avoidCenter: true});
+                if(path.length < 2) break; 
+
+                let nextNode = path[1];
+                let moveDir = getDirection(robot, nextNode);
+
+                // 2. TURN
+                if(robot.dir !== moveDir) {
+                    robot.dir = moveDir;
+                    draw();
+                    await new Promise(r => setTimeout(r, animSpeed));
+                }
+
+                // Save Prev for Backtrack
+                let prevNode = {x: robot.x, y: robot.y};
+
+                // 3. WALK
+                robot.x = nextNode.x;
+                robot.y = nextNode.y;
+                pathTrace.push({x: robot.x, y: robot.y});
+                
+                draw();
+                let m = getMetrics(pathTrace);
+                updateScoreUI(m.dist, m.turns, m.dist, m.turns);
+                await new Promise(r => setTimeout(r, animSpeed));
+
+                // 4. CHECK GOAL (Rejection Logic)
+                if(isGoal(robot.x, robot.y)) {
+                    if(wallsPlaced < maxWalls) {
+                        // Reached too early. Block entry.
+                        let entryDir = getDirection(prevNode, robot);
+                        toggleWallInGrid(grid, prevNode.x, prevNode.y, entryDir);
+                        
+                        let checkPath = solveAStar(grid, {x:0, y:0}); // Standard check
+                        
+                        if(checkPath.length > 0) {
+                            wallsPlaced++;
+                            genStatus.innerText = `Goal Rejection! Walls: ${wallsPlaced}`;
+                            // Backtrack
+                            robot.x = prevNode.x;
+                            robot.y = prevNode.y;
+                            pathTrace.push({x: robot.x, y: robot.y});
+                            draw();
+                            await new Promise(r => setTimeout(r, animSpeed));
+                            continue;
+                        } else {
+                            toggleWallInGrid(grid, prevNode.x, prevNode.y, entryDir);
+                            genStatus.innerText = "Goal Inevitable.";
+                            break;
+                        }
+                    } else {
+                        genStatus.innerText = "Goal Reached (Max Walls).";
+                        break; 
+                    }
+                }
+
+                // 5. BLOCK FRONT (Strict Rule)
+                // The robot tries to go forward in 'robot.dir'. We block it.
+                // We use the same 'avoidCenter: true' for the check to ensure 
+                // we don't block the only path to the outer ring if possible, 
+                // though usually we just care about solvability (standard check).
+                
+                let blockDir = robot.dir; 
+
+                if(grid[robot.x][robot.y][blockDir] === 0) {
+                    
+                    toggleWallInGrid(grid, robot.x, robot.y, blockDir);
+
+                    // Solvability check must be Standard (can we reach goal at all?)
+                    let checkPath = solveAStar(grid, {x:0, y:0}, {avoidCenter: false});
+                    
+                    if(checkPath.length > 0) {
+                        wallsPlaced++;
+                        genStatus.innerText = `Blocking Front. Walls: ${wallsPlaced}`;
+                        draw();
+                        await new Promise(r => setTimeout(r, animSpeed));
+                    } else {
+                        // Impossible, remove wall
+                        toggleWallInGrid(grid, robot.x, robot.y, blockDir);
+                    }
+                }
+            }
+
+            genStatus.innerText = `Done! Walls: ${wallsPlaced}`;
+            robot = {x:0, y:0, dir:1};
+            draw();
+            genBtn.disabled = false;
+        }
+
+        // Helper
+        function getDirection(a, b) {
+            let dx = b.x - a.x;
+            let dy = b.y - a.y;
+            if(dy === 1) return 0; // N
+            if(dx === 1) return 1; // E
+            if(dy === -1) return 2; // S
+            if(dx === -1) return 3; // W
+            return a.dir;
+        }
+
+        function toggleWallInGrid(g, x, y, d) {
+            if(x<0||x>=gridSize||y<0||y>=gridSize) return;
+            g[x][y][d] = g[x][y][d] ? 0 : 1;
+            if(d===0 && y<gridSize-1) g[x][y+1][2] = g[x][y][d];
+            if(d===2 && y>0)          g[x][y-1][0] = g[x][y][d];
+            if(d===1 && x<gridSize-1) g[x+1][y][3] = g[x][y][d];
+            if(d===3 && x>0)          g[x-1][y][1] = g[x][y][d];
+        }
+
+        // --- Visual Simulation ---
+
+        function toggleRun() {
+            if(isRunning) stopSimulation();
+            else startSimulation();
+        }
+
+        function startSimulation() {
+            isRunning = true;
+            runBtn.innerText = "Stop";
+            runBtn.className = "btn-stop";
+            
+            robot = {x:0, y:0, dir: 1};
+            pathTrace = [{x:0, y:0}];
+
+            if(algoSelect.value === 'astar') {
+                aStarPath = solveAStar(grid, {x:0, y:0}, {avoidCenter: false});
+                aStarIndex = 0;
+            } else {
+                floodMemory = initGrid(gridSize);
+            }
+            loop();
+        }
+
+        function stopSimulation() {
+            isRunning = false;
+            cancelAnimationFrame(animationId);
+            runBtn.innerText = "Test Run";
+            runBtn.className = "btn-test";
+        }
+
+        function loop() {
+            if(!isRunning) return;
+
+            let moved = false;
+            
+            if(!isGoal(robot.x, robot.y)) {
+                if(algoSelect.value === 'astar') {
+                    if(aStarPath.length > 0 && aStarIndex < aStarPath.length) {
+                        let next = aStarPath[aStarIndex++];
+                        robot.dir = getDirection(robot, next); 
+                        robot.x = next.x;
+                        robot.y = next.y;
+                        moved = true;
+                    }
+                } else {
+                    moved = stepFloodFill();
+                }
+            }
+
+            if(moved) {
+                pathTrace.push({x:robot.x, y:robot.y});
+            }
+
+            let runM = getMetrics(pathTrace);
+            let bestM = getMetrics(solveAStar(grid, {x:0, y:0}));
+            updateScoreUI(runM.dist, runM.turns, bestM.dist, bestM.turns);
+
+            draw();
+
+            if(moved) {
+                setTimeout(() => { animationId = requestAnimationFrame(loop); }, 40); 
+            } else if (!isGoal(robot.x, robot.y)) {
+                 requestAnimationFrame(loop);
+            }
+        }
+
+        function updateScoreUI(rd, rt, bd, bt) {
+            uiRunDist.innerText = rd; uiRunTurns.innerText = rt;
+            uiBestDist.innerText = bd; uiBestTurns.innerText = bt;
+            let score = (bd + bt) + 0.1 * (rd + rt);
+            uiFinalScore.innerText = score.toFixed(2);
+        }
+
+        function isGoal(x, y) {
+            return goalPositions.some(g => g.x === x && g.y === y);
+        }
+
+        // --- Core Algos ---
+
+        // Modified with options.avoidCenter
+        function solveAStar(targetGrid, startObj, options={}) {
+            let start = startObj || {x:0, y:0};
+            let openSet = [{x:start.x, y:start.y, g:0, f:0, parent:null}];
+            let closed = new Set();
+            let centerCoord = (gridSize / 2) - 0.5;
+
+            while(openSet.length) {
+                openSet.sort((a,b)=>a.f - b.f);
+                let u = openSet.shift();
+                if(isGoal(u.x, u.y)) {
+                    let path = [];
+                    while(u) { path.push({x:u.x, y:u.y}); u = u.parent; }
+                    return path.reverse();
+                }
+                let k = `${u.x},${u.y}`;
+                if(closed.has(k)) continue;
+                closed.add(k);
+                const dirs = [[0,1,0], [1,0,1], [0,-1,2], [-1,0,3]]; 
+                for(let d of dirs) {
+                    let nx = u.x + d[0], ny = u.y + d[1], wIdx = d[2];
+                    if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
+                        if(targetGrid[u.x][u.y][wIdx] === 0) {
+                            if(!closed.has(`${nx},${ny}`)) {
+                                
+                                // COST CALCULATION
+                                let moveCost = 1;
+                                
+                                // Repulse Logic: Higher cost near center
+                                if(options.avoidCenter) {
+                                    let distToC = Math.abs(nx - centerCoord) + Math.abs(ny - centerCoord);
+                                    // Penalty increases as distToC decreases
+                                    // Max dist is roughly Size. Penalty factor 5.
+                                    moveCost += Math.max(0, gridSize - distToC) * 5;
+                                }
+
+                                let g = u.g + moveCost;
+                                let h = Math.abs(nx - centerCoord) + Math.abs(ny - centerCoord);
+                                openSet.push({x:nx, y:ny, g:g, f:g+h, parent:u});
+                            }
+                        }
+                    }
+                }
+            }
+            return [];
+        }
+
+        function stepFloodFill() {
+            let x = robot.x, y = robot.y;
+            let real = grid[x][y];
+            floodMemory[x][y] = [...real];
+            if(y<gridSize-1) floodMemory[x][y+1][2] = real[0];
+            if(x<gridSize-1) floodMemory[x+1][y][3] = real[1];
+            if(y>0)          floodMemory[x][y-1][0] = real[2];
+            if(x>0)          floodMemory[x-1][y][1] = real[3];
+
+            let dist = Array(gridSize).fill().map(()=>Array(gridSize).fill(9999));
+            let q = [];
+            goalPositions.forEach(g => { if(g.x<gridSize && g.y<gridSize) { dist[g.x][g.y]=0; q.push(g); } });
+
+            while(q.length) {
+                let u = q.shift();
+                let dVal = dist[u.x][u.y];
+                let walls = floodMemory[u.x][u.y];
+                const dirs = [[0,1,0], [1,0,1], [0,-1,2], [-1,0,3]];
+                for(let d of dirs) {
+                    if(walls[d[2]] === 0) {
+                        let nx = u.x + d[0], ny = u.y + d[1];
+                        if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
+                            if(dist[nx][ny] === 9999) { dist[nx][ny] = dVal + 1; q.push({x:nx, y:ny}); }
+                        }
+                    }
+                }
+            }
+
+            let minD = 9999, next = null;
+            let myWalls = floodMemory[x][y];
+            const moves = [{x:x, y:y+1, w:0}, {x:x+1, y:y, w:1}, {x:x, y:y-1, w:2}, {x:x-1, y:y, w:3}];
+            for(let m of moves) {
+                if(m.x>=0 && m.x<gridSize && m.y>=0 && m.y<gridSize) {
+                    if(myWalls[m.w] === 0) {
+                        let d = dist[m.x][m.y];
+                        if(d < minD) { minD = d; next = m; }
+                    }
+                }
+            }
+            if(next && minD < 9999) { 
+                let dir = getDirection(robot, next);
+                if(dir !== -1) robot.dir = dir;
+                robot.x = next.x; 
+                robot.y = next.y; 
+                return true; 
+            }
+            return false;
+        }
+
+        function getMetrics(path) {
+            if(!path || path.length < 2) return {dist:0, turns:0};
+            let dist = path.length - 1, turns = 0;
+            let dir = {dx:0, dy:1}; 
+            for(let i=0; i<path.length-1; i++) {
+                let dx = path[i+1].x - path[i].x;
+                let dy = path[i+1].y - path[i].y;
+                if(dx !== dir.dx || dy !== dir.dy) turns++;
+                dir = {dx, dy};
+            }
+            return {dist, turns};
+        }
+
+        function getCanvasPos(x, y) {
+            return { px: x * cellSize, py: (gridSize - 1 - y) * cellSize };
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Highlights
+            drawCell(startPos.x, startPos.y, "#E3F2FD");
+            goalPositions.forEach(p => {
+                if(p.x < gridSize && p.y < gridSize) drawCell(p.x, p.y, "#FFEBEE");
+            });
+            // Grid
+            ctx.lineWidth = 1; ctx.strokeStyle = "#eee"; ctx.beginPath();
+            for(let i=0; i<=gridSize; i++) {
+                ctx.moveTo(0, i*cellSize); ctx.lineTo(gridSize*cellSize, i*cellSize);
+                ctx.moveTo(i*cellSize, 0); ctx.lineTo(i*cellSize, gridSize*cellSize);
+            }
+            ctx.stroke();
+            // Trace
+            if(pathTrace.length > 1) {
+                ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0, 123, 255, 0.5)";
+                ctx.beginPath();
+                let s = getCanvasPos(pathTrace[0].x, pathTrace[0].y);
+                ctx.moveTo(s.px+cellSize/2, s.py+cellSize/2);
+                for(let i=1; i<pathTrace.length; i++) {
+                    let p = getCanvasPos(pathTrace[i].x, pathTrace[i].y);
+                    ctx.lineTo(p.px+cellSize/2, p.py+cellSize/2);
+                }
+                ctx.stroke();
+            }
+            // Walls
+            ctx.lineWidth = 4; ctx.strokeStyle = "#222"; ctx.lineCap = "round"; ctx.beginPath();
+            for(let x=0; x<gridSize; x++) {
+                for(let y=0; y<gridSize; y++) {
+                    let w = grid[x][y];
+                    let pos = getCanvasPos(x, y);
+                    let px = pos.px, py = pos.py;
+                    if(w[0]) { ctx.moveTo(px, py); ctx.lineTo(px+cellSize, py); }
+                    if(w[1]) { ctx.moveTo(px+cellSize, py); ctx.lineTo(px+cellSize, py+cellSize); }
+                    if(w[2]) { ctx.moveTo(px, py+cellSize); ctx.lineTo(px+cellSize, py+cellSize); }
+                    if(w[3]) { ctx.moveTo(px, py); ctx.lineTo(px, py+cellSize); }
+                }
+            }
+            ctx.stroke();
+            // Robot
+            drawRobot();
+        }
+
+        function drawRobot() {
+            let cur = isRunning || genBtn.disabled ? robot : (pathTrace.length ? Object.assign({}, pathTrace[pathTrace.length-1], {dir: robot.dir}) : {x:0, y:0, dir: robot.dir});
+            let pos = getCanvasPos(cur.x, cur.y);
+            let cx = pos.px + cellSize/2;
+            let cy = pos.py + cellSize/2;
+            let size = cellSize / 3;
+
+            ctx.fillStyle = "#d63384";
+            ctx.beginPath();
+            ctx.save();
+            ctx.translate(cx, cy);
+            
+            let angle = 0;
+            if(cur.dir === 1) angle = Math.PI/2;
+            else if(cur.dir === 2) angle = Math.PI;
+            else if(cur.dir === 3) angle = -Math.PI/2;
+            
+            ctx.rotate(angle);
+            ctx.moveTo(0, -size); 
+            ctx.lineTo(size, size); 
+            ctx.lineTo(-size, size); 
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        }
+
+        function drawCell(x, y, color) {
+            let pos = getCanvasPos(x, y); ctx.fillStyle = color; ctx.fillRect(pos.px, pos.py, cellSize, cellSize);
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            if(isRunning || genBtn.disabled) return;
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const x = Math.floor(mouseX / cellSize);
+            const visualRow = Math.floor(mouseY / cellSize);
+            const y = (gridSize - 1) - visualRow; 
+            if(x < 0 || x >= gridSize || y < 0 || y >= gridSize) return;
+            const localX = mouseX % cellSize;
+            const localY = mouseY % cellSize;
+            const th = cellSize * 0.25;
+            if (localY < th) toggleWall(x, y, 0);       
+            else if (localY > cellSize - th) toggleWall(x, y, 2); 
+            else if (localX < th) toggleWall(x, y, 3);  
+            else if (localX > cellSize - th) toggleWall(x, y, 1); 
+            draw();
+        });
+
+        function toggleWall(x, y, d) {
+            toggleWallInGrid(grid, x, y, d);
+        }
+
+        function saveMaze() {
+            fetch('/generate_csv', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({size: gridSize, grid: grid})
+            })
+            .then(r=>r.blob()).then(blob=>{
+                let url = URL.createObjectURL(blob);
+                let a = document.createElement('a'); a.href = url; a.download = 'maze.csv';
+                document.body.appendChild(a); a.click(); a.remove();
+            });
+        }
+
+        fileInput.addEventListener('change', (e) => {
+            let f = e.target.files[0]; if(!f) return;
+            let fd = new FormData(); fd.append('file', f);
+            fetch('/load_csv', {method:'POST', body:fd})
+            .then(r=>r.json()).then(d=>{
+                if(d.error) alert(d.error); else {
+                    stopSimulation(); sizeSelect.value = d.size; resizeCanvas(); 
+                    grid = d.grid; draw();
+                }
+            });
+            fileInput.value='';
+        });
+
+        sizeSelect.addEventListener('change', resizeCanvas);
+        resizeCanvas();
+    </script>
+</body>
+</html>
