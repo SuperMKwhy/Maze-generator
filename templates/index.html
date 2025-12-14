@@ -80,7 +80,7 @@
                 <label>Algorithm</label>
                 <select id="genAlgo">
                     <option value="centershy_zigzag" selected>Center-Shy Zigzag (Hardest)</option>
-                    <option value="centershy">Center-Shy (Traps)</option>
+                    <option value="centershy">Center-Shy (Standard)</option>
                     <option value="dfs_zigzag">DFS (Zigzag Bias)</option>
                     <option value="dfs">Recursive Backtracker</option>
                     <option value="prim">Randomized Prim's</option>
@@ -240,7 +240,7 @@
             updateDensityUI();
         }
 
-        // --- INTERACTION LOGIC (Click to Set Start OR Edit Walls) ---
+        // --- INTERACTION LOGIC ---
         function toggleSetStart() {
             isSettingStart = !isSettingStart;
             if(isSettingStart) {
@@ -258,14 +258,11 @@
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
 
-            // Map pixel to grid
             const gx = Math.floor(x / cellSize);
             const gy = gridSize - 1 - Math.floor(y / cellSize);
             
-            // Bounds check
             if(gx < 0 || gx >= gridSize || gy < 0 || gy >= gridSize) return;
 
-            // 1. SET START POINT MODE
             if(isSettingStart) {
                 if(!isGoal(gx, gy)) {
                     startPos = {x: gx, y: gy};
@@ -279,59 +276,38 @@
                 return;
             }
 
-            // 2. EDIT WALL MODE (If not setting start)
-            // Determine position within the cell (0 to cellSize)
-            // Note: Canvas Y is inverted relative to Grid Y visually for calculation
+            // Edit Wall Mode
             const cellX = x % cellSize;
             const cellY = y % cellSize;
-            const margin = cellSize * 0.25; // Click within 25% of edge to toggle
+            const margin = cellSize * 0.25;
 
-            // Helper to toggle wall safely
-            // Dir: 0=N, 1=E, 2=S, 3=W
-            // Canvas Y=0 is Top. Grid Y=Max is Top.
-            // cellY small -> Top of visual cell -> North Wall (0)
-            
             let toggled = false;
-
-            if(cellY < margin) {
-                toggleWall(gx, gy, 0); // North
-                toggled = true;
-            } else if(cellY > cellSize - margin) {
-                toggleWall(gx, gy, 2); // South
-                toggled = true;
-            } else if(cellX > cellSize - margin) {
-                toggleWall(gx, gy, 1); // East
-                toggled = true;
-            } else if(cellX < margin) {
-                toggleWall(gx, gy, 3); // West
-                toggled = true;
-            }
+            if(cellY < margin) { toggleWall(gx, gy, 0); toggled = true; } 
+            else if(cellY > cellSize - margin) { toggleWall(gx, gy, 2); toggled = true; } 
+            else if(cellX > cellSize - margin) { toggleWall(gx, gy, 1); toggled = true; } 
+            else if(cellX < margin) { toggleWall(gx, gy, 3); toggled = true; }
 
             if(toggled) {
-                stopSimulation(); // Stop run if map changes
+                stopSimulation();
                 draw();
                 updateDensityUI();
             }
         });
 
         function toggleWall(x, y, dir) {
-            // dir: 0=N, 1=E, 2=S, 3=W
-            // Prevent removing outer boundary
-            if(y === gridSize - 1 && dir === 0) return; // Top edge
-            if(x === gridSize - 1 && dir === 1) return; // Right edge
-            if(y === 0 && dir === 2) return;            // Bottom edge
-            if(x === 0 && dir === 3) return;            // Left edge
+            if(y === gridSize - 1 && dir === 0) return; 
+            if(x === gridSize - 1 && dir === 1) return; 
+            if(y === 0 && dir === 2) return;            
+            if(x === 0 && dir === 3) return;            
 
             let currentVal = grid[x][y][dir];
             let newVal = currentVal === 1 ? 0 : 1;
             
             grid[x][y][dir] = newVal;
-
-            // Update neighbor
-            if(dir === 0 && y < gridSize - 1) grid[x][y+1][2] = newVal; // Neighbor South
-            if(dir === 1 && x < gridSize - 1) grid[x+1][y][3] = newVal; // Neighbor West
-            if(dir === 2 && y > 0)            grid[x][y-1][0] = newVal; // Neighbor North
-            if(dir === 3 && x > 0)            grid[x-1][y][1] = newVal; // Neighbor East
+            if(dir === 0 && y < gridSize - 1) grid[x][y+1][2] = newVal; 
+            if(dir === 1 && x < gridSize - 1) grid[x+1][y][3] = newVal; 
+            if(dir === 2 && y > 0)            grid[x][y-1][0] = newVal; 
+            if(dir === 3 && x > 0)            grid[x-1][y][1] = newVal; 
         }
 
         // --- PRNG ---
@@ -369,7 +345,6 @@
             updateDensityUI();
         }
 
-        // --- DENSITY LOGIC ---
         function enforceWallDensity(rng) {
             const maxInternalWalls = 2 * gridSize * (gridSize - 1);
             const desiredPct = parseInt(densitySlider.value) / 100.0;
@@ -392,8 +367,8 @@
             let index = 0;
             while(currentCount > targetWallCount && index < existingWalls.length) {
                 let w = existingWalls[index];
-                if(w.dir === 0) removeWall(w.x, w.y, w.x, w.y+1); // Remove N
-                else if(w.dir === 1) removeWall(w.x, w.y, w.x+1, w.y); // Remove E
+                if(w.dir === 0) removeWall(w.x, w.y, w.x, w.y+1); 
+                else if(w.dir === 1) removeWall(w.x, w.y, w.x+1, w.y); 
                 currentCount--;
                 index++;
             }
@@ -414,6 +389,7 @@
 
         // --- ALGORITHMS ---
 
+        // UPDATED: Now supports explicit Branching (Junctions) to create Dead Ends
         function runCenterShyZigzagDFS(rng) {
             let visited = createVisitedMask();
             let stack = [{x: startPos.x, y: startPos.y}]; 
@@ -423,12 +399,14 @@
             while(stack.length > 0) {
                 let current = stack[stack.length - 1];
                 let neighbors = getUnvisitedNeighbors(current.x, current.y, visited);
+
                 if(neighbors.length > 0) {
                     let prevDx = 0, prevDy = 0;
                     if(stack.length >= 2) {
                         let parent = stack[stack.length - 2];
                         prevDx = current.x - parent.x; prevDy = current.y - parent.y;
                     }
+
                     neighbors.forEach(n => {
                         let distScore = Math.abs(n.x - cx) + Math.abs(n.y - cy);
                         let turnBonus = 0;
@@ -438,12 +416,39 @@
                         }
                         n.finalScore = (distScore * 10) + turnBonus;
                     });
+
+                    // Sort: High Score (Outer/Zigzag) -> Low Score (Inner/Straight)
                     neighbors.sort((a, b) => b.finalScore - a.finalScore);
-                    let chosen = (rng() < 0.0) ? neighbors[neighbors.length - 1] : neighbors[0];
-                    removeWall(current.x, current.y, chosen.x, chosen.y);
-                    visited[chosen.x][chosen.y] = true;
-                    stack.push({x: chosen.x, y: chosen.y});
-                } else stack.pop();
+
+                    let best = neighbors[0];
+                    let trap = neighbors[neighbors.length - 1];
+                    let branched = false;
+
+                    // TRAP LOGIC: 30% chance to open BOTH paths if different
+                    // Creates a junction: Enters 'Best' now, leaves 'Trap' pending on stack
+                    if(neighbors.length > 1 && rng() < 0.25 && best !== trap) {
+                        // 1. Prepare Trap (Push first, so it's processed LAST)
+                        removeWall(current.x, current.y, trap.x, trap.y);
+                        visited[trap.x][trap.y] = true;
+                        stack.push({x: trap.x, y: trap.y});
+                        
+                        // 2. Prepare Best (Push second, so it's processed NOW)
+                        removeWall(current.x, current.y, best.x, best.y);
+                        visited[best.x][best.y] = true;
+                        stack.push({x: best.x, y: best.y});
+                        branched = true;
+                    } 
+                    
+                    if(!branched) {
+                        // Standard DFS (No branch)
+                        let chosen = best; 
+                        removeWall(current.x, current.y, chosen.x, chosen.y);
+                        visited[chosen.x][chosen.y] = true;
+                        stack.push({x: chosen.x, y: chosen.y});
+                    }
+                } else {
+                    stack.pop();
+                }
             }
         }
 
@@ -461,6 +466,8 @@
                         let distB = Math.abs(b.x - cx) + Math.abs(b.y - cy);
                         return distB - distA; 
                     });
+                    // Simple logic: 25% chance to pick the WORST neighbor (Trap) immediately
+                    // This moves the robot into the trap.
                     let chosen = (rng() < 0.25) ? neighbors[neighbors.length-1] : neighbors[0];
                     removeWall(current.x, current.y, chosen.x, chosen.y);
                     visited[chosen.x][chosen.y] = true;
