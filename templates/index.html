@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Adversarial Maze Generator</title>
+    <title>Deceptive Zigzag Generator</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f4f7f6; color: #333; }
         h1 { margin: 20px 0; }
@@ -38,19 +38,28 @@
         .btn-gen { background-color: #6f42c1; } 
         .btn-load { background-color: #007bff; }
         .btn-save { background-color: #28a745; }
+        .btn-set-start { background-color: #17a2b8; } 
+        .btn-set-start.active { background-color: #ffc107; color: #333; animation: pulse 1s infinite; }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
 
         .group-box { border: 1px solid #eee; padding: 10px; border-radius: 5px; background: #fafafa; }
         .row { display: flex; gap: 5px; }
 
         .score-box { padding: 10px; background: #eef; border-radius: 5px; font-family: monospace; font-size: 12px; }
         .score-val { font-weight: bold; color: #007bff; }
+
+        /* Slider Styles */
+        .slider-container { margin-top: 10px; }
+        input[type="range"] { width: 100%; margin: 5px 0; cursor: pointer; }
+        .slider-val { float: right; color: #6f42c1; font-weight: bold; }
         
         input[type="file"] { display: none; }
     </style>
 </head>
 <body>
 
-    <h1>MicroMouse Generator (Avoid Center)</h1>
+    <h1>MicroMouse: Deceptive Zigzag</h1>
 
     <div class="main-container">
         
@@ -62,30 +71,51 @@
                     <option value="16">16 x 16</option>
                     <option value="32">32 x 32</option>
                 </select>
-                <button class="btn-reset" onclick="resetMaze()">Reset Grid</button>
+                <button class="btn-reset" onclick="resetMaze()">Reset (Clear)</button>
             </div>
 
-            <!-- Generator -->
+            <!-- Seeded Generator -->
             <div class="group-box">
-                <label style="color:#6f42c1;">Adversarial Generator</label>
-                <div class="row">
+                <label style="color:#6f42c1;">Generator Settings</label>
+                
+                <label>Algorithm</label>
+                <select id="genAlgo">
+                    <option value="centershy_zigzag" selected>Center-Shy Zigzag (Hardest)</option>
+                    <option value="centershy">Center-Shy (Traps)</option>
+                    <option value="dfs_zigzag">DFS (Zigzag Bias)</option>
+                    <option value="dfs">Recursive Backtracker</option>
+                    <option value="prim">Randomized Prim's</option>
+                    <option value="kruskal">Kruskal's Algorithm</option>
+                    <option value="aldous">Aldous-Broder (Chaos)</option>
+                </select>
+
+                <!-- Wall Density Slider -->
+                <div class="slider-container">
+                    <label>Wall Density Limit <span id="densityVal" class="slider-val">50%</span></label>
+                    <input type="range" id="densitySlider" min="0" max="100" value="50" oninput="document.getElementById('densityVal').innerText = this.value + '%'">
+                    <div style="font-size:10px; color:#888; margin-top:2px;">(Normal maze is approx 48-50%)</div>
+                </div>
+
+                <div class="row" style="margin-top:5px;">
                     <div>
-                        <label>Target Walls</label>
-                        <input type="number" id="genWalls" value="150" min="1">
+                        <label>Seed</label>
+                        <input type="number" id="mazeSeed" value="12345" placeholder="Seed">
                     </div>
                 </div>
-                <button id="genBtn" class="btn-gen" onclick="generateMazeWalk()">Generate (Outer Ring)</button>
-                <div id="genStatus" style="font-size:11px; color:#666; margin-top:5px; height:15px;"></div>
+                
+                <button id="genBtn" class="btn-gen" onclick="generateMaze()">Generate Maze</button>
             </div>
 
             <!-- Simulation -->
             <div class="group-box">
-                <label>Robot Simulation</label>
+                <label>Solver</label>
                 <select id="algoSelect">
-                    <option value="astar">A* (God Mode)</option>
+                    <option value="astar">A* (Shortest Path)</option>
                     <option value="flood">Flood Fill (Explore)</option>
                 </select>
-                <button id="runBtn" class="btn-test" onclick="toggleRun()">Test Run</button>
+                <!-- START POINT SELECTION -->
+                <button id="btnSetStart" class="btn-set-start" onclick="toggleSetStart()">Set Start Point</button>
+                <button id="runBtn" class="btn-test" onclick="toggleRun()">Test Solve</button>
             </div>
 
             <!-- Score -->
@@ -98,6 +128,9 @@
                 </div>
                 <div style="margin-top:5px; font-size:14px;">
                     Score: <span id="finalScore" style="color:#d63384; font-weight:bold;">0</span>
+                </div>
+                <div style="margin-top:5px; border-top:1px solid #ccc; padding-top:5px; font-size:11px;">
+                    Actual Density: <span id="actualDensity" style="color:#333;">0%</span>
                 </div>
             </div>
 
@@ -119,39 +152,50 @@
         const ctx = canvas.getContext('2d');
         const sizeSelect = document.getElementById('sizeSelect');
         const algoSelect = document.getElementById('algoSelect');
+        const genAlgoSelect = document.getElementById('genAlgo');
         const runBtn = document.getElementById('runBtn');
-        const genBtn = document.getElementById('genBtn');
-        const genStatus = document.getElementById('genStatus');
         const fileInput = document.getElementById('fileInput');
+        const btnSetStart = document.getElementById('btnSetStart');
+        const densitySlider = document.getElementById('densitySlider');
+        const uiActualDensity = document.getElementById('actualDensity');
 
-        // Score Refs
+        // UI
         const uiRunDist = document.getElementById('runDist');
         const uiRunTurns = document.getElementById('runTurns');
         const uiBestDist = document.getElementById('bestDist');
         const uiBestTurns = document.getElementById('bestTurns');
         const uiFinalScore = document.getElementById('finalScore');
+        const inpSeed = document.getElementById('mazeSeed');
 
-        // Config
         let cellSize = 35;
         let gridSize = 16;
-        let grid = []; // [x][y][N,E,S,W]
-        const startPos = {x: 0, y: 0};
+        let grid = []; 
+        let startPos = {x: 0, y: 0};
         let goalPositions = [];
 
-        // State
         let isRunning = false;
+        let isSettingStart = false; 
         let animationId = null;
         let robot = { x: 0, y: 0, dir: 1 }; 
         let pathTrace = [];
         
-        // Sim State
         let aStarPath = [];
         let aStarIndex = 0;
         let floodMemory = []; 
 
         // --- Init ---
 
-        function initGrid(size) {
+        function initGridWalls(size) {
+            let g = [];
+            for(let x=0; x<size; x++) {
+                let col = [];
+                for(let y=0; y<size; y++) col.push([1, 1, 1, 1]); 
+                g.push(col);
+            }
+            return g;
+        }
+        
+        function initGridEmpty(size) {
             let g = [];
             for(let x=0; x<size; x++) {
                 let col = [];
@@ -159,21 +203,20 @@
                 g.push(col);
             }
             for(let i=0; i<size; i++) {
-                g[i][size-1][0] = 1; // N
-                g[size-1][i][1] = 1; // E
-                g[i][0][2] = 1;      // S
-                g[0][i][3] = 1;      // W
+                g[i][size-1][0] = 1; g[size-1][i][1] = 1; 
+                g[i][0][2] = 1;      g[0][i][3] = 1;      
             }
             return g;
         }
 
         function resetMaze() {
             stopSimulation();
-            grid = initGrid(gridSize);
-            robot = {x:0, y:0, dir:1}; 
+            grid = initGridEmpty(gridSize);
+            robot = {x:startPos.x, y:startPos.y, dir:1}; 
             pathTrace = [];
             draw();
             updateScoreUI(0,0,0,0);
+            updateDensityUI();
         }
 
         function resizeCanvas() {
@@ -188,176 +231,450 @@
                 {x: mid - 1, y: mid - 1}, {x: mid - 1, y: mid},
                 {x: mid, y: mid - 1}, {x: mid, y: mid}
             ];
-
-            grid = initGrid(gridSize);
+            
+            startPos = {x:0, y:0}; 
+            grid = initGridEmpty(gridSize);
             draw();
+            updateDensityUI();
         }
 
-        // --- Adversarial Generator (Avoid Center) ---
+        // --- START POINT SELECTION LOGIC ---
+        function toggleSetStart() {
+            isSettingStart = !isSettingStart;
+            if(isSettingStart) {
+                stopSimulation();
+                btnSetStart.innerText = "Click Grid Cell...";
+                btnSetStart.classList.add('active');
+            } else {
+                btnSetStart.innerText = "Set Start Point";
+                btnSetStart.classList.remove('active');
+            }
+        }
 
-        async function generateMazeWalk() {
-            if(isRunning) stopSimulation();
-            resetMaze();
+        canvas.addEventListener('mousedown', (e) => {
+            if(!isSettingStart) return;
             
-            const maxWalls = parseInt(document.getElementById('genWalls').value) || 150;
-            const animSpeed = 40; 
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const gx = Math.floor(x / cellSize);
+            const gy = gridSize - 1 - Math.floor(y / cellSize);
 
-            genBtn.disabled = true;
-            let wallsPlaced = 0;
-            
-            robot = {x:0, y:0, dir: 0}; 
-            pathTrace = [{x:0, y:0}]; 
-            genStatus.innerText = "Generator: Staying Outer Ring...";
-
-            while(wallsPlaced < maxWalls) {
-                
-                // 1. Get Path (With AVOID CENTER preference)
-                // We pass 'true' for avoidCenter option
-                let path = solveAStar(grid, {x: robot.x, y: robot.y}, {avoidCenter: true});
-                if(path.length < 2) break; 
-
-                let nextNode = path[1];
-                let moveDir = getDirection(robot, nextNode);
-
-                // 2. TURN
-                if(robot.dir !== moveDir) {
-                    robot.dir = moveDir;
+            if(gx >= 0 && gx < gridSize && gy >= 0 && gy < gridSize) {
+                if(!isGoal(gx, gy)) {
+                    startPos = {x: gx, y: gy};
+                    isSettingStart = false;
+                    btnSetStart.innerText = "Set Start Point";
+                    btnSetStart.classList.remove('active');
                     draw();
-                    await new Promise(r => setTimeout(r, animSpeed));
+                } else {
+                    alert("Cannot start inside the goal!");
                 }
+            }
+        });
 
-                // Save Prev for Backtrack
-                let prevNode = {x: robot.x, y: robot.y};
+        // --- PRNG ---
+        function mulberry32(a) {
+            return function() {
+                var t = a += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+        }
 
-                // 3. WALK
-                robot.x = nextNode.x;
-                robot.y = nextNode.y;
-                pathTrace.push({x: robot.x, y: robot.y});
-                
-                draw();
-                let m = getMetrics(pathTrace);
-                updateScoreUI(m.dist, m.turns, m.dist, m.turns);
-                await new Promise(r => setTimeout(r, animSpeed));
+        // --- MAZE GENERATORS ---
 
-                // 4. CHECK GOAL (Rejection Logic)
-                if(isGoal(robot.x, robot.y)) {
-                    if(wallsPlaced < maxWalls) {
-                        // Reached too early. Block entry.
-                        let entryDir = getDirection(prevNode, robot);
-                        toggleWallInGrid(grid, prevNode.x, prevNode.y, entryDir);
-                        
-                        let checkPath = solveAStar(grid, {x:0, y:0}); // Standard check
-                        
-                        if(checkPath.length > 0) {
-                            wallsPlaced++;
-                            genStatus.innerText = `Goal Rejection! Walls: ${wallsPlaced}`;
-                            // Backtrack
-                            robot.x = prevNode.x;
-                            robot.y = prevNode.y;
-                            pathTrace.push({x: robot.x, y: robot.y});
-                            draw();
-                            await new Promise(r => setTimeout(r, animSpeed));
-                            continue;
-                        } else {
-                            toggleWallInGrid(grid, prevNode.x, prevNode.y, entryDir);
-                            genStatus.innerText = "Goal Inevitable.";
-                            break;
-                        }
-                    } else {
-                        genStatus.innerText = "Goal Reached (Max Walls).";
-                        break; 
+        function generateMaze() {
+            stopSimulation();
+            let algo = genAlgoSelect.value;
+            let seedVal = parseInt(inpSeed.value) || 999;
+            let rng = mulberry32(seedVal);
+
+            grid = initGridWalls(gridSize);
+
+            // 1. Generate Structure (Standard Algorithms)
+            if (algo === 'centershy_zigzag') runCenterShyZigzagDFS(rng);
+            else if (algo === 'centershy') runCenterShyDFS(rng);
+            else if (algo === 'dfs_zigzag') runDFSZigzag(rng);
+            else if (algo === 'dfs') runDFS(rng);
+            else if (algo === 'prim') runPrims(rng);
+            else if (algo === 'kruskal') runKruskal(rng);
+            else if (algo === 'aldous') runAldousBroder(rng);
+
+            connectSingleGoalEntry(rng);
+            
+            // 2. Enforce Wall Density
+            enforceWallDensity(rng);
+
+            draw();
+            updateDensityUI();
+        }
+
+        // --- DENSITY LOGIC ---
+
+        function enforceWallDensity(rng) {
+            // Count total possible internal walls
+            // Internal Horizontal Walls: gridSize * (gridSize - 1)
+            // Internal Vertical Walls:   gridSize * (gridSize - 1)
+            const maxInternalWalls = 2 * gridSize * (gridSize - 1);
+            
+            const desiredPct = parseInt(densitySlider.value) / 100.0;
+            const targetWallCount = Math.floor(maxInternalWalls * desiredPct);
+
+            let existingWalls = [];
+            
+            // Collect all current internal walls
+            for(let x = 0; x < gridSize; x++) {
+                for(let y = 0; y < gridSize; y++) {
+                    // Check North Wall (0)
+                    if(y < gridSize - 1) {
+                        if(grid[x][y][0] === 1) existingWalls.push({x:x, y:y, dir:0, type:'N'});
                     }
-                }
-
-                // 5. BLOCK FRONT (Strict Rule)
-                // The robot tries to go forward in 'robot.dir'. We block it.
-                // We use the same 'avoidCenter: true' for the check to ensure 
-                // we don't block the only path to the outer ring if possible, 
-                // though usually we just care about solvability (standard check).
-                
-                let blockDir = robot.dir; 
-
-                if(grid[robot.x][robot.y][blockDir] === 0) {
-                    
-                    toggleWallInGrid(grid, robot.x, robot.y, blockDir);
-
-                    // Solvability check must be Standard (can we reach goal at all?)
-                    let checkPath = solveAStar(grid, {x:0, y:0}, {avoidCenter: false});
-                    
-                    if(checkPath.length > 0) {
-                        wallsPlaced++;
-                        genStatus.innerText = `Blocking Front. Walls: ${wallsPlaced}`;
-                        draw();
-                        await new Promise(r => setTimeout(r, animSpeed));
-                    } else {
-                        // Impossible, remove wall
-                        toggleWallInGrid(grid, robot.x, robot.y, blockDir);
+                    // Check East Wall (1)
+                    if(x < gridSize - 1) {
+                        if(grid[x][y][1] === 1) existingWalls.push({x:x, y:y, dir:1, type:'E'});
                     }
                 }
             }
 
-            genStatus.innerText = `Done! Walls: ${wallsPlaced}`;
-            robot = {x:0, y:0, dir:1};
-            draw();
-            genBtn.disabled = false;
+            // Shuffle existing walls to remove randomly
+            for (let i = existingWalls.length - 1; i > 0; i--) {
+                const j = Math.floor(rng() * (i + 1));
+                [existingWalls[i], existingWalls[j]] = [existingWalls[j], existingWalls[i]];
+            }
+
+            let currentCount = existingWalls.length;
+
+            // Remove walls if we have too many
+            let index = 0;
+            while(currentCount > targetWallCount && index < existingWalls.length) {
+                let w = existingWalls[index];
+                
+                // Remove the wall
+                if(w.dir === 0) { // North
+                     removeWall(w.x, w.y, w.x, w.y+1);
+                } else if(w.dir === 1) { // East
+                     removeWall(w.x, w.y, w.x+1, w.y);
+                }
+                
+                currentCount--;
+                index++;
+            }
+            
+            // NOTE: If currentCount < targetWallCount, we do NOT add walls.
+            // Adding random walls to a generated maze risks blocking the solution path.
         }
 
-        // Helper
-        function getDirection(a, b) {
-            let dx = b.x - a.x;
-            let dy = b.y - a.y;
-            if(dy === 1) return 0; // N
-            if(dx === 1) return 1; // E
-            if(dy === -1) return 2; // S
-            if(dx === -1) return 3; // W
-            return a.dir;
+        function updateDensityUI() {
+            let maxInternal = 2 * gridSize * (gridSize - 1);
+            let current = 0;
+            for(let x=0; x<gridSize; x++) {
+                for(let y=0; y<gridSize; y++) {
+                    if(y < gridSize - 1 && grid[x][y][0] === 1) current++;
+                    if(x < gridSize - 1 && grid[x][y][1] === 1) current++;
+                }
+            }
+            let pct = Math.round((current / maxInternal) * 100);
+            uiActualDensity.innerText = pct + "% (" + current + "/" + maxInternal + ")";
         }
 
-        function toggleWallInGrid(g, x, y, d) {
-            if(x<0||x>=gridSize||y<0||y>=gridSize) return;
-            g[x][y][d] = g[x][y][d] ? 0 : 1;
-            if(d===0 && y<gridSize-1) g[x][y+1][2] = g[x][y][d];
-            if(d===2 && y>0)          g[x][y-1][0] = g[x][y][d];
-            if(d===1 && x<gridSize-1) g[x+1][y][3] = g[x][y][d];
-            if(d===3 && x>0)          g[x-1][y][1] = g[x][y][d];
+
+        // --- ALGORITHMS (Standard) ---
+
+        function runCenterShyZigzagDFS(rng) {
+            let visited = createVisitedMask();
+            let stack = [{x: startPos.x, y: startPos.y}]; 
+            visited[startPos.x][startPos.y] = true;       
+            let cx = (gridSize / 2) - 0.5; let cy = (gridSize / 2) - 0.5;
+
+            while(stack.length > 0) {
+                let current = stack[stack.length - 1];
+                let neighbors = getUnvisitedNeighbors(current.x, current.y, visited);
+                if(neighbors.length > 0) {
+                    let prevDx = 0, prevDy = 0;
+                    if(stack.length >= 2) {
+                        let parent = stack[stack.length - 2];
+                        prevDx = current.x - parent.x; prevDy = current.y - parent.y;
+                    }
+                    neighbors.forEach(n => {
+                        let distScore = Math.abs(n.x - cx) + Math.abs(n.y - cy);
+                        let turnBonus = 0;
+                        if(prevDx !== 0 || prevDy !== 0) {
+                            let ndx = n.x - current.x; let ndy = n.y - current.y;
+                            if(ndx !== prevDx || ndy !== prevDy) turnBonus = 100.0;
+                        }
+                        n.finalScore = (distScore * 10) + turnBonus;
+                    });
+                    neighbors.sort((a, b) => b.finalScore - a.finalScore);
+                    let chosen = (rng() < 0.0) ? neighbors[neighbors.length - 1] : neighbors[0];
+                    removeWall(current.x, current.y, chosen.x, chosen.y);
+                    visited[chosen.x][chosen.y] = true;
+                    stack.push({x: chosen.x, y: chosen.y});
+                } else stack.pop();
+            }
         }
 
-        // --- Visual Simulation ---
+        function runCenterShyDFS(rng) {
+            let visited = createVisitedMask();
+            let stack = [{x: startPos.x, y: startPos.y}]; 
+            visited[startPos.x][startPos.y] = true;       
+            let cx = (gridSize / 2) - 0.5; let cy = (gridSize / 2) - 0.5;
+            while(stack.length > 0) {
+                let current = stack[stack.length - 1];
+                let neighbors = getUnvisitedNeighbors(current.x, current.y, visited);
+                if(neighbors.length > 0) {
+                    neighbors.sort((a, b) => {
+                        let distA = Math.abs(a.x - cx) + Math.abs(a.y - cy);
+                        let distB = Math.abs(b.x - cx) + Math.abs(b.y - cy);
+                        return distB - distA; 
+                    });
+                    let chosen = (rng() < 0.25) ? neighbors[neighbors.length-1] : neighbors[0];
+                    removeWall(current.x, current.y, chosen.x, chosen.y);
+                    visited[chosen.x][chosen.y] = true;
+                    stack.push({x: chosen.x, y: chosen.y});
+                } else stack.pop();
+            }
+        }
+
+        function runDFSZigzag(rng) {
+            let visited = createVisitedMask();
+            let stack = [{x: startPos.x, y: startPos.y}]; 
+            visited[startPos.x][startPos.y] = true;       
+            while(stack.length > 0) {
+                let current = stack[stack.length - 1];
+                let neighbors = getUnvisitedNeighbors(current.x, current.y, visited);
+                if(neighbors.length > 0) {
+                    let chosen = null;
+                    if(stack.length >= 2) {
+                        let parent = stack[stack.length - 2];
+                        let dx = current.x - parent.x; let dy = current.y - parent.y;
+                        let straights = [], turns = [];
+                        for(let n of neighbors) {
+                            let ndx = n.x - current.x; let ndy = n.y - current.y;
+                            if(ndx === dx && ndy === dy) straights.push(n); else turns.push(n);
+                        }
+                        if(turns.length > 0) {
+                            if(rng() < 0.95 || straights.length === 0) chosen = turns[Math.floor(rng() * turns.length)];
+                            else chosen = straights[0];
+                        } else chosen = straights[0];
+                    }
+                    if(!chosen) chosen = neighbors[Math.floor(rng() * neighbors.length)];
+                    removeWall(current.x, current.y, chosen.x, chosen.y);
+                    visited[chosen.x][chosen.y] = true;
+                    stack.push({x: chosen.x, y: chosen.y});
+                } else stack.pop();
+            }
+        }
+
+        function runDFS(rng) {
+            let visited = createVisitedMask();
+            let stack = [{x: startPos.x, y: startPos.y}]; 
+            visited[startPos.x][startPos.y] = true;       
+            while(stack.length > 0) {
+                let current = stack[stack.length - 1];
+                let neighbors = getUnvisitedNeighbors(current.x, current.y, visited);
+                if(neighbors.length > 0) {
+                    let chosen = neighbors[Math.floor(rng() * neighbors.length)];
+                    removeWall(current.x, current.y, chosen.x, chosen.y);
+                    visited[chosen.x][chosen.y] = true;
+                    stack.push({x: chosen.x, y: chosen.y});
+                } else stack.pop();
+            }
+        }
+
+        function runPrims(rng) {
+            let visited = createVisitedMask();
+            let frontier = [];
+            visited[startPos.x][startPos.y] = true; 
+            addFrontier(startPos.x, startPos.y, visited, frontier); 
+            while(frontier.length > 0) {
+                let randIndex = Math.floor(rng() * frontier.length);
+                let current = frontier[randIndex];
+                frontier.splice(randIndex, 1);
+                let connected = getVisitedNeighbors(current.x, current.y, visited);
+                if(connected.length > 0) {
+                    let target = connected[Math.floor(rng() * connected.length)];
+                    removeWall(current.x, current.y, target.x, target.y);
+                    visited[current.x][current.y] = true;
+                    addFrontier(current.x, current.y, visited, frontier);
+                }
+            }
+        }
+
+        function runKruskal(rng) {
+            let edges = [];
+            let sets = []; let idCounter = 0;
+            for(let x=0; x<gridSize; x++) {
+                sets[x] = [];
+                for(let y=0; y<gridSize; y++) {
+                    sets[x][y] = idCounter++;
+                    if(x < gridSize-1) edges.push({x1:x, y1:y, x2:x+1, y2:y});
+                    if(y < gridSize-1) edges.push({x1:x, y1:y, x2:x, y2:y+1});
+                }
+            }
+            edges = edges.filter(e => !isGoal(e.x1, e.y1) && !isGoal(e.x2, e.y2));
+            for(let i = edges.length - 1; i > 0; i--) {
+                const j = Math.floor(rng() * (i + 1));
+                [edges[i], edges[j]] = [edges[j], edges[i]];
+            }
+            for(let e of edges) {
+                let id1 = getSetID(sets, e.x1, e.y1);
+                let id2 = getSetID(sets, e.x2, e.y2);
+                if(id1 !== id2) {
+                    removeWall(e.x1, e.y1, e.x2, e.y2);
+                    replaceSetID(sets, id2, id1);
+                }
+            }
+        }
+
+        function runAldousBroder(rng) {
+            let visited = createVisitedMask();
+            let remaining = (gridSize * gridSize) - 4; 
+            let current = {x: startPos.x, y: startPos.y}; 
+            visited[startPos.x][startPos.y] = true; 
+            remaining--;
+            while(remaining > 0) {
+                const dirs = [[0,1], [1,0], [0,-1], [-1,0]];
+                let d = dirs[Math.floor(rng() * 4)];
+                let nx = current.x + d[0]; let ny = current.y + d[1];
+                if(nx >= 0 && nx < gridSize && ny >= 0 && ny < gridSize) {
+                    if(!isGoal(nx, ny)) {
+                        if(!visited[nx][ny]) {
+                            visited[nx][ny] = true;
+                            removeWall(current.x, current.y, nx, ny);
+                            remaining--;
+                        }
+                        current = {x: nx, y: ny};
+                    }
+                }
+            }
+        }
+
+        // --- HELPERS ---
+
+        function createVisitedMask() {
+            let v = Array(gridSize).fill().map(() => Array(gridSize).fill(false));
+            goalPositions.forEach(p => v[p.x][p.y] = true);
+            return v;
+        }
+
+        function getUnvisitedNeighbors(x, y, visited) {
+            let n = [];
+            const dirs = [[0,1], [1,0], [0,-1], [-1,0]];
+            for(let d of dirs) {
+                let nx = x + d[0], ny = y + d[1];
+                if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
+                    if(!visited[nx][ny]) n.push({x: nx, y: ny});
+                }
+            }
+            return n;
+        }
+
+        function addFrontier(x, y, visited, frontier) {
+            const dirs = [[0,1], [1,0], [0,-1], [-1,0]];
+            for(let d of dirs) {
+                let nx = x + d[0], ny = y + d[1];
+                if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
+                    if(!visited[nx][ny]) {
+                        if(!frontier.some(f => f.x===nx && f.y===ny)) frontier.push({x: nx, y: ny});
+                    }
+                }
+            }
+        }
+
+        function getVisitedNeighbors(x, y, visited) {
+            let n = [];
+            const dirs = [[0,1], [1,0], [0,-1], [-1,0]];
+            for(let d of dirs) {
+                let nx = x + d[0], ny = y + d[1];
+                if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
+                    if(visited[nx][ny]) n.push({x: nx, y: ny});
+                }
+            }
+            return n;
+        }
+
+        function getSetID(sets, x, y) { return sets[x][y]; }
+        function replaceSetID(sets, oldID, newID) {
+            for(let x=0; x<gridSize; x++) {
+                for(let y=0; y<gridSize; y++) {
+                    if(sets[x][y] === oldID) sets[x][y] = newID;
+                }
+            }
+        }
+
+        function removeWall(x1, y1, x2, y2) {
+            let dx = x2 - x1, dy = y2 - y1;
+            let d1 = -1, d2 = -1;
+            if(dy===1){d1=0;d2=2;} else if(dx===1){d1=1;d2=3;}
+            else if(dy===-1){d1=2;d2=0;} else if(dx===-1){d1=3;d2=1;}
+            
+            if(d1!==-1) {
+                grid[x1][y1][d1] = 0;
+                grid[x2][y2][d2] = 0;
+            }
+        }
+
+        function connectSingleGoalEntry(rng) {
+            for(let i=0; i<goalPositions.length; i++) {
+                for(let j=i+1; j<goalPositions.length; j++) {
+                    if(Math.abs(goalPositions[i].x - goalPositions[j].x) + Math.abs(goalPositions[i].y - goalPositions[j].y) === 1) {
+                        removeWall(goalPositions[i].x, goalPositions[i].y, goalPositions[j].x, goalPositions[j].y);
+                    }
+                }
+            }
+            let candidates = [];
+            const dirs = [[0,1], [1,0], [0,-1], [-1,0]];
+            goalPositions.forEach(gp => {
+                dirs.forEach(d => {
+                    let nx = gp.x + d[0], ny = gp.y + d[1];
+                    if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
+                        if(!isGoal(nx, ny)) candidates.push({srcX: gp.x, srcY: gp.y, tgtX: nx, tgtY: ny});
+                    }
+                });
+            });
+            if(candidates.length > 0) {
+                let c = candidates[Math.floor(rng() * candidates.length)];
+                removeWall(c.srcX, c.srcY, c.tgtX, c.tgtY);
+            }
+        }
+
+        // --- SOLVER ---
 
         function toggleRun() {
             if(isRunning) stopSimulation();
             else startSimulation();
         }
 
-        function startSimulation() {
-            isRunning = true;
-            runBtn.innerText = "Stop";
-            runBtn.className = "btn-stop";
-            
-            robot = {x:0, y:0, dir: 1};
-            pathTrace = [{x:0, y:0}];
-
-            if(algoSelect.value === 'astar') {
-                aStarPath = solveAStar(grid, {x:0, y:0}, {avoidCenter: false});
-                aStarIndex = 0;
-            } else {
-                floodMemory = initGrid(gridSize);
-            }
-            loop();
-        }
-
         function stopSimulation() {
             isRunning = false;
             cancelAnimationFrame(animationId);
-            runBtn.innerText = "Test Run";
+            runBtn.innerText = "Test Solve";
             runBtn.className = "btn-test";
         }
 
-        function loop() {
+        function startSimulation() {
+            isRunning = true;
+            runBtn.innerText = "Stop Solve";
+            runBtn.className = "btn-stop";
+            
+            robot = {x: startPos.x, y: startPos.y, dir: 1};
+            pathTrace = [{x: startPos.x, y: startPos.y}];
+
+            if(algoSelect.value === 'astar') {
+                aStarPath = solveAStar(grid, startPos);
+                aStarIndex = 0;
+            } else {
+                floodMemory = initGridEmpty(gridSize); 
+            }
+            loopSolver();
+        }
+
+        function loopSolver() {
             if(!isRunning) return;
 
             let moved = false;
-            
             if(!isGoal(robot.x, robot.y)) {
                 if(algoSelect.value === 'astar') {
                     if(aStarPath.length > 0 && aStarIndex < aStarPath.length) {
@@ -377,38 +694,32 @@
             }
 
             let runM = getMetrics(pathTrace);
-            let bestM = getMetrics(solveAStar(grid, {x:0, y:0}));
+            let bestM = getMetrics(solveAStar(grid, startPos));
             updateScoreUI(runM.dist, runM.turns, bestM.dist, bestM.turns);
 
             draw();
 
             if(moved) {
-                setTimeout(() => { animationId = requestAnimationFrame(loop); }, 40); 
+                setTimeout(() => { animationId = requestAnimationFrame(loopSolver); }, 40); 
             } else if (!isGoal(robot.x, robot.y)) {
-                 requestAnimationFrame(loop);
+                 requestAnimationFrame(loopSolver);
             }
         }
 
-        function updateScoreUI(rd, rt, bd, bt) {
-            uiRunDist.innerText = rd; uiRunTurns.innerText = rt;
-            uiBestDist.innerText = bd; uiBestTurns.innerText = bt;
-            let score = (bd + bt) + 0.1 * (rd + rt);
-            uiFinalScore.innerText = score.toFixed(2);
+        // --- HELPERS ---
+        function getDirection(a, b) {
+            let dx = b.x - a.x;
+            let dy = b.y - a.y;
+            if(dy === 1) return 0; if(dx === 1) return 1;
+            if(dy === -1) return 2; if(dx === -1) return 3;
+            return a.dir;
         }
 
-        function isGoal(x, y) {
-            return goalPositions.some(g => g.x === x && g.y === y);
-        }
-
-        // --- Core Algos ---
-
-        // Modified with options.avoidCenter
-        function solveAStar(targetGrid, startObj, options={}) {
+        function solveAStar(targetGrid, startObj) {
             let start = startObj || {x:0, y:0};
             let openSet = [{x:start.x, y:start.y, g:0, f:0, parent:null}];
             let closed = new Set();
             let centerCoord = (gridSize / 2) - 0.5;
-
             while(openSet.length) {
                 openSet.sort((a,b)=>a.f - b.f);
                 let u = openSet.shift();
@@ -426,19 +737,7 @@
                     if(nx>=0 && nx<gridSize && ny>=0 && ny<gridSize) {
                         if(targetGrid[u.x][u.y][wIdx] === 0) {
                             if(!closed.has(`${nx},${ny}`)) {
-                                
-                                // COST CALCULATION
-                                let moveCost = 1;
-                                
-                                // Repulse Logic: Higher cost near center
-                                if(options.avoidCenter) {
-                                    let distToC = Math.abs(nx - centerCoord) + Math.abs(ny - centerCoord);
-                                    // Penalty increases as distToC decreases
-                                    // Max dist is roughly Size. Penalty factor 5.
-                                    moveCost += Math.max(0, gridSize - distToC) * 5;
-                                }
-
-                                let g = u.g + moveCost;
+                                let g = u.g + 1;
                                 let h = Math.abs(nx - centerCoord) + Math.abs(ny - centerCoord);
                                 openSet.push({x:nx, y:ny, g:g, f:g+h, parent:u});
                             }
@@ -457,11 +756,9 @@
             if(x<gridSize-1) floodMemory[x+1][y][3] = real[1];
             if(y>0)          floodMemory[x][y-1][0] = real[2];
             if(x>0)          floodMemory[x-1][y][1] = real[3];
-
             let dist = Array(gridSize).fill().map(()=>Array(gridSize).fill(9999));
             let q = [];
             goalPositions.forEach(g => { if(g.x<gridSize && g.y<gridSize) { dist[g.x][g.y]=0; q.push(g); } });
-
             while(q.length) {
                 let u = q.shift();
                 let dVal = dist[u.x][u.y];
@@ -476,7 +773,6 @@
                     }
                 }
             }
-
             let minD = 9999, next = null;
             let myWalls = floodMemory[x][y];
             const moves = [{x:x, y:y+1, w:0}, {x:x+1, y:y, w:1}, {x:x, y:y-1, w:2}, {x:x-1, y:y, w:3}];
@@ -491,9 +787,7 @@
             if(next && minD < 9999) { 
                 let dir = getDirection(robot, next);
                 if(dir !== -1) robot.dir = dir;
-                robot.x = next.x; 
-                robot.y = next.y; 
-                return true; 
+                robot.x = next.x; robot.y = next.y; return true; 
             }
             return false;
         }
@@ -511,6 +805,19 @@
             return {dist, turns};
         }
 
+        function updateScoreUI(rd, rt, bd, bt) {
+            uiRunDist.innerText = rd; uiRunTurns.innerText = rt;
+            uiBestDist.innerText = bd; uiBestTurns.innerText = bt;
+            let score = (bd + bt) + 0.1 * (rd + rt);
+            uiFinalScore.innerText = score.toFixed(2);
+        }
+
+        function isGoal(x, y) {
+            return goalPositions.some(g => g.x === x && g.y === y);
+        }
+
+        // --- DRAWING ---
+
         function getCanvasPos(x, y) {
             return { px: x * cellSize, py: (gridSize - 1 - y) * cellSize };
         }
@@ -518,7 +825,8 @@
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             // Highlights
-            drawCell(startPos.x, startPos.y, "#E3F2FD");
+            drawCell(startPos.x, startPos.y, "#C8E6C9"); 
+
             goalPositions.forEach(p => {
                 if(p.x < gridSize && p.y < gridSize) drawCell(p.x, p.y, "#FFEBEE");
             });
@@ -560,13 +868,15 @@
         }
 
         function drawRobot() {
-            let cur = isRunning || genBtn.disabled ? robot : (pathTrace.length ? Object.assign({}, pathTrace[pathTrace.length-1], {dir: robot.dir}) : {x:0, y:0, dir: robot.dir});
+            let cur = robot; 
+            if(isRunning && pathTrace.length > 0) cur = Object.assign({}, pathTrace[pathTrace.length-1], {dir: robot.dir});
+            
             let pos = getCanvasPos(cur.x, cur.y);
             let cx = pos.px + cellSize/2;
             let cy = pos.py + cellSize/2;
             let size = cellSize / 3;
 
-            ctx.fillStyle = "#d63384";
+            ctx.fillStyle = "#007bff";
             ctx.beginPath();
             ctx.save();
             ctx.translate(cx, cy);
@@ -589,29 +899,7 @@
             let pos = getCanvasPos(x, y); ctx.fillStyle = color; ctx.fillRect(pos.px, pos.py, cellSize, cellSize);
         }
 
-        canvas.addEventListener('mousedown', (e) => {
-            if(isRunning || genBtn.disabled) return;
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-            const x = Math.floor(mouseX / cellSize);
-            const visualRow = Math.floor(mouseY / cellSize);
-            const y = (gridSize - 1) - visualRow; 
-            if(x < 0 || x >= gridSize || y < 0 || y >= gridSize) return;
-            const localX = mouseX % cellSize;
-            const localY = mouseY % cellSize;
-            const th = cellSize * 0.25;
-            if (localY < th) toggleWall(x, y, 0);       
-            else if (localY > cellSize - th) toggleWall(x, y, 2); 
-            else if (localX < th) toggleWall(x, y, 3);  
-            else if (localX > cellSize - th) toggleWall(x, y, 1); 
-            draw();
-        });
-
-        function toggleWall(x, y, d) {
-            toggleWallInGrid(grid, x, y, d);
-        }
-
+        // --- File IO ---
         function saveMaze() {
             fetch('/generate_csv', {
                 method: 'POST',
@@ -633,6 +921,7 @@
                 if(d.error) alert(d.error); else {
                     stopSimulation(); sizeSelect.value = d.size; resizeCanvas(); 
                     grid = d.grid; draw();
+                    updateDensityUI();
                 }
             });
             fileInput.value='';
