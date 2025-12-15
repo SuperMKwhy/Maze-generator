@@ -21,7 +21,7 @@ Micromouse/
 ├── templates/
 │   └── index.html        # Web interface
 ├── README.md             # This file
-├── generator.ipynb       # Jupyter notebook for maze generation
+├── generator_true.py       # maze generator
 └── *.csv                 # Maze data files
 ```
 
@@ -177,6 +177,30 @@ To use the notebook:
 ```bash
 jupyter notebook generator.ipynb
 ```
+
+## Generator (`generator_true.py`)
+
+This repository includes `generator_true.py`, an offline maze generator implementing the `CenterShyZigzagGenerator`.
+
+- Algorithm summary:
+  - Generates a perfect maze using a DFS-style algorithm.
+  - "Center-shy" heuristic favors cells farther from the maze center.
+  - "Zigzag" gives a large bonus for moves that turn relative to the previous move, producing winding corridors.
+  - After generation the 2x2 center cells are explicitly connected (Micromouse goal area).
+
+- Running the generator:
+
+```bash
+python generator_true.py
+```
+
+This runs `generate_and_save(size=32, seed=145)` by default and creates a file named `maze_32x32_centershy_zigzag.csv`.
+
+- Notes:
+  - The generated CSV uses `id = 0` by default (edit `generate_and_save()` if you need a different id).
+  - To reproduce a maze, set `seed` in `generate_and_save()` or call the function from another script.
+  - Filename format: `maze_{size}x{size}_centershy_zigzag.csv`.
+
 
 ## Troubleshooting
 
